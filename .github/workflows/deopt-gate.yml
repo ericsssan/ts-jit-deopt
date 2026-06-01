@@ -1,0 +1,28 @@
+name: deopt-gate
+
+# Stage 6: deopt regression testing. Runs the hot-path driver under V8 IC
+# logging and fails the build if a watched hot-path access regresses from
+# monomorphic back to megamorphic.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  deopt-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Static layer — strict typecheck
+        run: npm run typecheck
+      - name: Static layer — JIT-friendliness lint
+        run: npm run lint
+      - name: Dynamic layer — hot-path deopt gate
+        run: npm run gate
+        # To also fail on polymorphic (not just megamorphic):
+        #   env:
+        #     GATE_MAX_SEV: '2'

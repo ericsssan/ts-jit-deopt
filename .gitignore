@@ -1,0 +1,4 @@
+node_modules/
+isolate-*.log
+*.v8.log
+*.cpuprofile
