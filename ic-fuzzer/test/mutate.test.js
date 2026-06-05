@@ -13,12 +13,14 @@ describe('derive()', () => {
     assert.ok(strategies.length > 0);
   });
 
-  test('every strategy has name, desc, code, fnName', () => {
+  test('every strategy has name, desc, code, fnName, sample', () => {
     for (const s of derive(SEED)) {
       assert.equal(typeof s.name,   'string', `${s.name}: name`);
       assert.equal(typeof s.desc,   'string', `${s.name}: desc`);
       assert.equal(typeof s.code,   'string', `${s.name}: code`);
       assert.equal(typeof s.fnName, 'string', `${s.name}: fnName`);
+      // sample is null only for strategies whose code throws (shouldn't happen for well-formed seeds)
+      assert.notEqual(s.sample, undefined,    `${s.name}: sample field missing`);
     }
   });
 
@@ -35,12 +37,21 @@ describe('derive()', () => {
 
   test('generated code is valid JS and produces an object', () => {
     for (const s of derive(SEED)) {
-      // Wrap the generated function declaration and call it
       // eslint-disable-next-line no-new-func
       const fn = new Function(`${s.code}; return ${s.fnName};`)();
       assert.equal(typeof fn, 'function', `${s.name}: code did not produce a function`);
       const obj = fn(0);
       assert.equal(typeof obj, 'object', `${s.name}: make(0) is not an object`);
+    }
+  });
+
+  test('sample matches what the code produces', () => {
+    for (const s of derive(SEED)) {
+      if (s.sample === null) continue; // skip strategies that intentionally produce null
+      // eslint-disable-next-line no-new-func
+      const fn  = new Function(`${s.code}; return ${s.fnName};`)();
+      const obj = fn(0);
+      assert.deepEqual(s.sample, obj, `${s.name}: sample mismatch`);
     }
   });
 

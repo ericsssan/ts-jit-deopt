@@ -4,22 +4,56 @@ const fs   = require('fs');
 const path = require('path');
 const { SEV_LABEL } = require('./probe');
 
-function printRun({ subset, severity, phase }) {
-  if (phase === 'shrink') return; // silent during shrinking; summary printed at end
-  const label = SEV_LABEL[severity] || `sev=${severity}`;
-  const names = subset.length <= 5
-    ? subset.join(', ')
-    : `${subset.slice(0, 4).join(', ')}, … +${subset.length - 4}`;
-  process.stdout.write(`  [${label.padEnd(12)}]  ${names}\n`);
+/**
+ * Returns a progress tracker that:
+ *  - prints a dot (·) for boring runs (no ICs, monomorphic, crashed)
+ *  - breaks to a new line and prints details for interesting runs (poly/mega)
+ *  - is silent during the shrink phase
+ */
+function createProgress() {
+  let dotCount = 0;
+
+  function flush() {
+    if (dotCount > 0) { process.stdout.write('\n'); dotCount = 0; }
+  }
+
+  function tick({ severity, phase }) {
+    if (phase === 'shrink') return;
+    if (severity >= 2) {
+      flush();
+    } else {
+      process.stdout.write('·');
+      dotCount++;
+    }
+  }
+
+  return { tick, flush };
+}
+
+function printInteresting({ severity, subset }) {
+  const label = (SEV_LABEL[severity] || `sev=${severity}`).toUpperCase();
+  const shown = subset.length <= 4 ? subset.join(', ') : `${subset.slice(0, 3).join(', ')} … +${subset.length - 3}`;
+  console.log(`  [${label}]  ${shown}`);
 }
 
 function printShrinking() {
   console.log('\n[ic-fuzzer] shrinking to minimal set...\n');
 }
 
-function printResult({ found, minimalStrategies, ics, numShrinks, seed, targetName, outPath }) {
+function printResult({ found, minimalStrategies, ics, numShrinks, rngSeed, targetName, outPath, anyICs, anyMonomorphic, reproduceCmd }) {
   if (!found) {
-    console.log(`\n[ic-fuzzer] no ${targetName} found. Add more strategies and re-run.`);
+    console.log('');
+    if (!anyICs) {
+      console.log('[ic-fuzzer] no IC data observed for this function.');
+      console.log('            The seed may not match the properties your function actually reads,');
+      console.log('            or the function does not use property accesses on its argument.');
+    } else if (anyMonomorphic) {
+      console.log(`[ic-fuzzer] no ${targetName} found — all probes stayed monomorphic or below.`);
+      console.log('            The function appears JIT-friendly with this input variety.');
+      console.log('            Try a corpus of real production payloads for a more thorough check.');
+    } else {
+      console.log(`[ic-fuzzer] no ${targetName} found after all runs.`);
+    }
     return;
   }
 
@@ -27,7 +61,9 @@ function printResult({ found, minimalStrategies, ics, numShrinks, seed, targetNa
 
   for (let i = 0; i < minimalStrategies.length; i++) {
     const s = minimalStrategies[i];
-    console.log(`  ${String(i + 1).padStart(2)}. ${s.name.padEnd(32)}  ${s.desc}`);
+    const sampleStr = s.sample != null ? `  e.g. ${JSON.stringify(s.sample)}` : '';
+    console.log(`  ${String(i + 1).padStart(2)}. ${s.name.padEnd(28)}  ${s.desc}`);
+    if (sampleStr) console.log(`      ${sampleStr}`);
   }
 
   const failing = (ics || []).filter(ic => ic.severity >= 2);
@@ -37,17 +73,21 @@ function printResult({ found, minimalStrategies, ics, numShrinks, seed, targetNa
       const last = ic.updates[ic.updates.length - 1] || {};
       const loc  = `${path.relative(process.cwd(), ic.file)}:${ic.line}:${ic.column}`;
       console.log(
-        `    [${(SEV_LABEL[ic.severity] || ic.severity).toUpperCase().padEnd(12)}]` +
+        `    [${(SEV_LABEL[ic.severity] || '').toUpperCase().padEnd(12)}]` +
         `  .${(last.key || '?').padEnd(10)}  ${ic.functionName}  (${loc})`,
       );
     }
   }
 
-  const corpus = minimalStrategies.map(s => ({ strategy: s.name, desc: s.desc }));
+  const corpus = minimalStrategies.map(s => ({
+    strategy: s.name,
+    desc:     s.desc,
+    sample:   s.sample,
+  }));
   fs.writeFileSync(outPath, JSON.stringify(corpus, null, 2));
 
   console.log(`\n[ic-fuzzer] corpus written → ${path.relative(process.cwd(), outPath)}`);
-  console.log(`[ic-fuzzer] reproduce:  ic-fuzzer ... --seed-rng=${seed}`);
+  if (reproduceCmd) console.log(`[ic-fuzzer] reproduce:    ${reproduceCmd}`);
 }
 
-module.exports = { printRun, printShrinking, printResult };
+module.exports = { createProgress, printInteresting, printShrinking, printResult };
