@@ -25,7 +25,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings=0",
     "gate": "node ci/deopt-gate.js ci/gate-driver.js fixed",
-    "gate:broken": "node ci/deopt-gate.js ci/gate-driver.js broken"
+    "gate:broken": "node ci/deopt-gate.js ci/gate-driver.js broken",
+    "fuzz": "node fuzzer/run-fuzzer.js",
+    "fuzz:polymorphic": "node fuzzer/run-fuzzer.js --target=polymorphic"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

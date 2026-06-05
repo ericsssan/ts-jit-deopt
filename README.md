@@ -48,6 +48,48 @@ In production, you'd capture a sampled corpus of real payloads from the deserial
 
 ---
 
+## Discovering the shapes automatically
+
+Manually crafting shape variety — as `event-source.js` does — works, but it requires you to already know which structural mutations your codebase produces. In practice you're guessing. A cleaner approach is to use IC state itself as the feedback signal: generate structural mutations systematically, run them through the hot path under `--log-ic`, observe the IC severity, and stop when you've found the minimal set that pushes the function to megamorphic.
+
+This repo ships a shape fuzzer that does exactly that:
+
+```bash
+npm run fuzz
+```
+
+It works by adding one new shape variant per round and probing IC state after each:
+
+```
+[shape-fuzzer] target: megamorphic  (8 strategies in catalog)
+
+  round  1  [literal-canonical] ... monomorphic
+  round  2  [literal-canonical, literal-id-first] ... polymorphic
+  round  3  [literal-canonical, literal-id-first, literal-value-first] ... polymorphic
+  round  4  [literal-canonical, ..., incremental-t-i-v] ... polymorphic
+  round  5  [literal-canonical, ..., incremental-i-t-v] ... megamorphic ← STOP
+
+[shape-fuzzer] megamorphic reached with 5 shape(s):
+
+   1. literal-canonical     { type, id, value }  — baseline literal order
+   2. literal-id-first      { id, type, value }  — different property order
+   3. literal-value-first   { value, type, id }  — yet another order
+   4. incremental-t-i-v     e.type; e.id; e.value  — incremental, same order as canonical
+   5. incremental-i-t-v     e.id; e.type; e.value  — incremental, different order
+```
+
+The result is more interesting than the manually-coded `event-source.js` example: **extra fields aren't needed to trigger megamorphism**. Five different property orderings — three literal, two incremental — are sufficient. The fuzzer found this automatically; the hand-written example mixed in extra fields because that's the intuitive explanation for shape variety, but the IC doesn't care about field names as much as it cares about initialization order.
+
+The minimal triggering set is written to `fuzzer/corpus.json`, which can seed the CI gate for functions where you don't have a production corpus yet. The fuzzer can also target the polymorphic threshold — useful for catching IC degradation earlier, before it goes fully megamorphic:
+
+```bash
+npm run fuzz:polymorphic   # stops at 2 shapes (mono→poly transition)
+```
+
+Extend the strategy catalog in `fuzzer/shape-gen.js` to cover mutations specific to your codebase — prototype chains, frozen objects, class instances vs. plain objects.
+
+---
+
 ## What the trace actually shows
 
 With a representative corpus, you run the driver under IC logging:
@@ -228,6 +270,8 @@ npm run trace:broken   # raw --trace-deopt --log-ic for the broken hot path
 npm run trace:fixed    # raw --trace-deopt --log-ic for the fixed hot path
 npm run gate           # CI deopt-gate on the fixed path  -> PASS
 npm run gate:broken    # CI deopt-gate on the broken path -> FAIL
+npm run fuzz           # shape fuzzer: find minimal inputs that cause megamorphism
+npm run fuzz:polymorphic # same, stopping at the polymorphic threshold
 npm run ts             # the TypeScript version
 ```
 
@@ -250,6 +294,10 @@ ts-jit-deopt/
   ci/
     deopt-gate.js    ← dynamic layer: fail CI on mono→megamorphic regression
     gate-driver.js   ← replays the corpus through the chosen handler
+  fuzzer/
+    shape-gen.js     ← structural mutation strategies (extend this for your codebase)
+    fuzz-driver.js   ← hot-path driver run under --log-ic by the fuzzer
+    run-fuzzer.js    ← discovery loop: add shapes until IC degrades, report minimal set
   .github/workflows/
     deopt-gate.yml   ← drop-in GitHub Actions job
   ts/
