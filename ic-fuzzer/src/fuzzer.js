@@ -9,13 +9,14 @@ const { probe } = require('./probe');
  * @param {string}   opts.fnName
  * @param {object[]} opts.strategies
  * @param {number}   opts.targetSev    2 = polymorphic, 3 = megamorphic
+ * @param {string}   [opts.watchFile]  alternative file to watch for ICs (default: fnFile)
  * @param {number}   [opts.seed]       fast-check RNG seed
  * @param {number}   [opts.numRuns]
  * @param {Function} [opts.onRun]      ({ subset, severity, phase, hasICs, crashed, error })
  *
  * @returns {{ found, minimalStrategies, ics, numShrinks, rngSeed, anyICs, anyMonomorphic }}
  */
-async function fuzz({ fnFile, fnName, strategies, targetSev, seed, numRuns = 200, onRun }) {
+async function fuzz({ fnFile, fnName, strategies, targetSev, watchFile, seed, numRuns = 200, onRun }) {
   const names  = strategies.map(s => s.name);
   const byName = Object.fromEntries(strategies.map(s => [s.name, s]));
 
@@ -28,7 +29,7 @@ async function fuzz({ fnFile, fnName, strategies, targetSev, seed, numRuns = 200
       fc.subarray(names, { minLength: 1 }),
       async (subset) => {
         const selected = subset.map(n => byName[n]);
-        const { severity, error, hasICs, crashed } = await probe(fnFile, fnName, selected);
+        const { severity, error, hasICs, crashed } = await probe(fnFile, fnName, selected, watchFile);
 
         if (hasICs) anyICs = true;
         if (severity === 1) anyMonomorphic = true;
@@ -47,7 +48,7 @@ async function fuzz({ fnFile, fnName, strategies, targetSev, seed, numRuns = 200
 
   const minimalNames      = fcResult.counterexample[0];
   const minimalStrategies = minimalNames.map(n => byName[n]);
-  const { ics }           = await probe(fnFile, fnName, minimalStrategies);
+  const { ics }           = await probe(fnFile, fnName, minimalStrategies, watchFile);
 
   return { found: true, minimalStrategies, ics, numShrinks: fcResult.numShrinks, rngSeed: fcResult.seed, anyICs, anyMonomorphic };
 }

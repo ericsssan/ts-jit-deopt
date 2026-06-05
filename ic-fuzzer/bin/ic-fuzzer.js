@@ -26,6 +26,7 @@ function parseArgs(argv) {
     out:        path.resolve('ic-fuzzer-corpus.json'),
     verbose:    false,
     dryRun:     false,
+    watchFile:  null,
   };
 
   for (const a of args) {
@@ -36,6 +37,7 @@ function parseArgs(argv) {
     else if (a.startsWith('--rng='))        { opts.rng = Number(a.slice(6)); }
     else if (a.startsWith('--runs='))       { opts.numRuns = Number(a.slice(7)); }
     else if (a.startsWith('--out='))        { opts.out = path.resolve(a.slice(6)); }
+    else if (a.startsWith('--watch='))      { opts.watchFile = path.resolve(a.slice(8)); }
     else if (a === '--verbose' || a === '-v') { opts.verbose = true; }
     else if (a === '--dry-run')             { opts.dryRun = true; }
     else if (!a.startsWith('-')) {
@@ -68,6 +70,7 @@ options:
   --rng=<n>            reproduce a specific run (from a previous --rng= output)
   --runs=<n>           fast-check iteration cap (default: 200)
   --out=<file>         corpus output path (default: ic-fuzzer-corpus.json)
+  --watch=<file>       report ICs from this file instead of <file> (use for thin wrappers)
   --dry-run            list derived strategies without running
   --verbose            print driver errors (e.g. from omit strategies that crash)
 
@@ -142,6 +145,7 @@ examples:
     fnName:     opts.exportName,
     strategies,
     targetSev,
+    watchFile:  opts.watchFile,
     seed:       opts.rng,
     numRuns:    opts.numRuns,
     onRun({ subset, severity, phase, hasICs, crashed, error }) {

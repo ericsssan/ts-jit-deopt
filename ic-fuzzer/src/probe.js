@@ -41,7 +41,7 @@ process.stdout.write('checksum=' + _acc + '\\n');
  *   crashed:  boolean,  // whether the driver process exited non-zero
  * }}
  */
-async function probe(fnFile, fnName, strategies) {
+async function probe(fnFile, fnName, strategies, watchFile) {
   if (!strategies.length) return { severity: 0, ics: [], error: null, hasICs: false, crashed: false };
 
   const dir        = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-fuzzer-'));
@@ -74,9 +74,13 @@ async function probe(fnFile, fnName, strategies) {
     let data;
     try { data = await parseV8Log(logContent); } finally { console.error = origErr; }
 
-    const watchBase = path.basename(fnFile);
+    // Use last 2 path segments for matching (e.g. "eslint-utils/index.js") to avoid
+    // false positives with common names like index.js while still working for node_modules targets.
+    const target = watchFile || fnFile;
+    const parts = target.replace(/\\/g, '/').split('/');
+    const watchSuffix = parts.slice(-2).join('/');
     const ics = (data.ics || []).filter(
-      ic => ic.file && ic.file.includes(watchBase) && !ic.file.includes('node_modules'),
+      ic => ic.file && ic.file.includes(watchSuffix),
     );
 
     const severity = ics.length ? Math.max(...ics.map(ic => ic.severity)) : 0;
