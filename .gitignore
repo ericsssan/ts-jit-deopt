@@ -3,3 +3,4 @@ isolate-*.log
 *.v8.log
 *.cpuprofile
 fuzzer/corpus.json
+ic-fuzzer/ic-fuzzer-corpus.json
