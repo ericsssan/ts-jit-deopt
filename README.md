@@ -52,41 +52,74 @@ In production, you'd capture a sampled corpus of real payloads from the deserial
 
 Manually crafting shape variety — as `event-source.js` does — works, but it requires you to already know which structural mutations your codebase produces. In practice you're guessing. A cleaner approach is to use IC state itself as the feedback signal: generate structural mutations systematically, run them through the hot path under `--log-ic`, observe the IC severity, and stop when you've found the minimal set that pushes the function to megamorphic.
 
-This repo ships a shape fuzzer that does exactly that:
+This repo ships `ic-fuzzer`, a standalone tool that does exactly that:
 
 ```bash
-npm run fuzz
+cd ic-fuzzer
+node bin/ic-fuzzer.js ../broken/handler.js handleEvent \
+  --seed='{"type":"click","id":1,"value":2}'
 ```
 
-It works by adding one new shape variant per round and probing IC state after each:
+It derives shape mutations from the seed — all permutations of property order, incremental construction, extra fields, omissions, null prototype — then uses fast-check to find the minimal subset that degrades the IC. During search, it prints a dot per boring run and surfaces interesting ones:
 
 ```
-[shape-fuzzer] target: megamorphic  (8 strategies in catalog)
+[ic-fuzzer] handleEvent  in  ../broken/handler.js
+[ic-fuzzer] target: megamorphic  |  strategies: 19
 
-  round  1  [literal-canonical] ... monomorphic
-  round  2  [literal-canonical, literal-id-first] ... polymorphic
-  round  3  [literal-canonical, literal-id-first, literal-value-first] ... polymorphic
-  round  4  [literal-canonical, ..., incremental-t-i-v] ... polymorphic
-  round  5  [literal-canonical, ..., incremental-i-t-v] ... megamorphic ← STOP
+  [MEGAMORPHIC]  literal:type-id-value, incr:type-value-id, incr:id-type-value … +2
 
-[shape-fuzzer] megamorphic reached with 5 shape(s):
+[ic-fuzzer] shrinking to minimal set...
 
-   1. literal-canonical     { type, id, value }  — baseline literal order
-   2. literal-id-first      { id, type, value }  — different property order
-   3. literal-value-first   { value, type, id }  — yet another order
-   4. incremental-t-i-v     e.type; e.id; e.value  — incremental, same order as canonical
-   5. incremental-i-t-v     e.id; e.type; e.value  — incremental, different order
+[ic-fuzzer] minimal set: 5 shape(s)  (0 shrink step(s))
+
+   1. literal:type-id-value         { type, id, value }  literal
+        e.g. {"type":"click","id":0,"value":0}
+   2. incr:type-value-id            e.type; e.value; e.id  incremental
+        e.g. {"type":"click","value":0,"id":0}
+   3. incr:id-type-value            e.id; e.type; e.value  incremental
+        e.g. {"id":0,"type":"click","value":0}
+   4. incr:value-type-id            e.value; e.type; e.id  incremental
+        e.g. {"value":0,"type":"click","id":0}
+   5. incr:value-id-type            e.value; e.id; e.type  incremental
+        e.g. {"value":0,"id":0,"type":"click"}
+
+[ic-fuzzer] IC sites at megamorphic:
+    [MEGAMORPHIC ]  .id          handleEvent  (../broken/handler.js:10:16)
+    [MEGAMORPHIC ]  .type        handleEvent  (../broken/handler.js:10:32)
+    [MEGAMORPHIC ]  .value       handleEvent  (../broken/handler.js:10:52)
+
+[ic-fuzzer] corpus written → ic-fuzzer-corpus.json
+[ic-fuzzer] reproduce:    ic-fuzzer ../broken/handler.js handleEvent --seed=... --rng=482910
 ```
 
-The result is more interesting than the manually-coded `event-source.js` example: **extra fields aren't needed to trigger megamorphism**. Five different property orderings — three literal, two incremental — are sufficient. The fuzzer found this automatically; the hand-written example mixed in extra fields because that's the intuitive explanation for shape variety, but the IC doesn't care about field names as much as it cares about initialization order.
+The result is more interesting than the manually-coded `event-source.js` example: **extra fields aren't needed to trigger megamorphism**. Five different property orderings — one literal, four incremental — are sufficient. The fuzzer found this automatically; the hand-written example mixed in extra fields because that's the intuitive explanation for shape variety, but the IC doesn't care about extra fields as much as it cares about initialization order.
 
-The minimal triggering set is written to `fuzzer/corpus.json`, which can seed the CI gate for functions where you don't have a production corpus yet. The fuzzer can also target the polymorphic threshold — useful for catching IC degradation earlier, before it goes fully megamorphic:
+The minimal triggering set is written to `ic-fuzzer-corpus.json` alongside each strategy's sample object, so the result is immediately reproducible. You can also stop at the polymorphic threshold — useful for catching degradation before it goes fully megamorphic:
 
 ```bash
-npm run fuzz:polymorphic   # stops at 2 shapes (mono→poly transition)
+node bin/ic-fuzzer.js ../broken/handler.js handleEvent \
+  --seed='{"type":"click","id":1,"value":2}' \
+  --target=polymorphic
 ```
 
-Extend the strategy catalog in `fuzzer/shape-gen.js` to cover mutations specific to your codebase — prototype chains, frozen objects, class instances vs. plain objects.
+**Using `--watch` for library code.** When your entry point is a thin wrapper around a library function, the interesting ICs are inside the library, not the wrapper. Pass `--watch=<file>` to redirect IC collection to the file you actually care about:
+
+```bash
+node bin/ic-fuzzer.js test/fixtures/picomatch-scan-entry.js scanDirect \
+  --seed='{"pattern":"**/*.{js,ts}","parts":false,"scanToEnd":false,...}' \
+  --watch=../node_modules/picomatch/lib/scan.js
+```
+
+```
+[ic-fuzzer] IC sites at megamorphic:
+    [MEGAMORPHIC ]  .parts       scan  (node_modules/picomatch/lib/scan.js:53:26)
+    [MEGAMORPHIC ]  .scanToEnd   scan  (node_modules/picomatch/lib/scan.js:53:49)
+    [MEGAMORPHIC ]  .noext       scan  (node_modules/picomatch/lib/scan.js:171:14)
+    [MEGAMORPHIC ]  .unescape    scan  (node_modules/picomatch/lib/scan.js:319:12)
+    [MEGAMORPHIC ]  .tokens      scan  (node_modules/picomatch/lib/scan.js:342:12)
+```
+
+Five IC sites inside picomatch's real source, discovered by feeding it option objects with varying shapes — the kind of variety that naturally occurs when glob configs travel through queues and handlers as flat objects.
 
 ---
 
@@ -270,9 +303,14 @@ npm run trace:broken   # raw --trace-deopt --log-ic for the broken hot path
 npm run trace:fixed    # raw --trace-deopt --log-ic for the fixed hot path
 npm run gate           # CI deopt-gate on the fixed path  -> PASS
 npm run gate:broken    # CI deopt-gate on the broken path -> FAIL
-npm run fuzz           # shape fuzzer: find minimal inputs that cause megamorphism
-npm run fuzz:polymorphic # same, stopping at the polymorphic threshold
+npm run fuzz           # legacy shape fuzzer (see ic-fuzzer/ for the full tool)
 npm run ts             # the TypeScript version
+
+# ic-fuzzer (cd ic-fuzzer/ first)
+node bin/ic-fuzzer.js <file> <export> --seed='<json>'
+node bin/ic-fuzzer.js <file> <export> --seed='<json>' --target=polymorphic
+node bin/ic-fuzzer.js <file> <export> --seed='<json>' --watch=<library-file>
+node bin/ic-fuzzer.js <file> <export> --seed='<json>' --dry-run  # list strategies
 ```
 
 ### Layout
@@ -295,9 +333,15 @@ ts-jit-deopt/
     deopt-gate.js    ← dynamic layer: fail CI on mono→megamorphic regression
     gate-driver.js   ← replays the corpus through the chosen handler
   fuzzer/
-    shape-gen.js     ← structural mutation strategies (extend this for your codebase)
-    fuzz-driver.js   ← hot-path driver run under --log-ic by the fuzzer
-    run-fuzzer.js    ← discovery loop: add shapes until IC degrades, report minimal set
+    shape-gen.js     ← structural mutation strategies (legacy; see ic-fuzzer/)
+    fuzz-driver.js   ← hot-path driver (legacy)
+    run-fuzzer.js    ← discovery loop (legacy)
+  ic-fuzzer/
+    bin/ic-fuzzer.js ← CLI: ic-fuzzer <file> <export> --seed=<json> [--watch=<file>]
+    src/mutate.js    ← derives shape strategies from a seed object
+    src/probe.js     ← subprocess driver: runs under --log-ic, parses IC severity
+    src/fuzzer.js    ← fast-check loop: search + shrink to minimal shape set
+    src/reporter.js  ← progress dots, result formatting, corpus.json output
   .github/workflows/
     deopt-gate.yml   ← drop-in GitHub Actions job
   ts/
