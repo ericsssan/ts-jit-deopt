@@ -75,12 +75,40 @@ node bin/ic-fuzzer.js test/fixtures/picomatch-scan-entry.js scanDirect \
 
 Other flags: `--target=polymorphic`, `--corpus=<file>`, `--dry-run`, `--rng=<n>` (reproduce), `--runs=<n>`, `--count=<n>`, `--iters=<n>`.
 
+### The full optimization workflow
+
+ic-fuzzer covers the complete find → quantify → fix → verify loop:
+
+```bash
+# 1. Find it
+ic-fuzzer ./handler.js handleEvent --seed='{"type":"click","id":1,"value":2}'
+# → minimal set: 5 shapes, IC sites: .id .type .value
+
+# 2. Quantify — is this worth fixing? (--bench compares mono vs mixed-shape timing)
+ic-fuzzer ./handler.js handleEvent --seed='...' --bench
+# → [ic-fuzzer] bench: mono=54ms  mixed=229ms  Δ=4.2×
+
+# 3. Fix it — write a boundary normalizer (e.g. toEvent()) that coerces inputs
+#    to a single canonical shape (class instance or literal) before the hot path
+
+# 4. Verify — CI gate that fails if any IC rises above monomorphic
+ic-fuzzer ./handler.js handleEvent --seed='...' --assert-max=monomorphic
+# → [ic-fuzzer] PASS — handleEvent stays within monomorphic (exit 0)
+```
+
+**Why `fixed/handler.js` still reports megamorphic without a gate.**
+ic-fuzzer feeds plain objects directly to the target function, bypassing any boundary normalizer. If your fix is a `toEvent()` that coerces raw inputs to a `new Event(...)`, running ic-fuzzer on `handleEvent` after the fix will still report megamorphic — because ic-fuzzer never calls `toEvent`. This is expected: the megamorphic reads were *moved* to the boundary, not eliminated.
+
+The right targets after a boundary-normalization fix:
+- `handleEvent` with `--assert-max=monomorphic` — verifies the hot path is now clean
+- `toEvent` (without `--assert-max`) — verifies the boundary does what it should: finds megamorphism, confirming the coalescing reads are confined there
+
 ### Programmatic API
 
 `ic-fuzzer` exposes its full internals as a Node module:
 
 ```js
-const { fuzz, probe, derive, fromCorpus, SEV_LABEL } = require('ic-fuzzer');
+const { fuzz, probe, bench, derive, fromCorpus, SEV_LABEL } = require('ic-fuzzer');
 ```
 
 **`probe(fnFile, fnName, strategies, watchFile?, count?, iters?)` → `{ severity, ics, hasICs, crashed, error }`**

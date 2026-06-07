@@ -129,4 +129,10 @@ function buildJsonResult({ found, target, minimalStrategies, ics, numShrinks, rn
   };
 }
 
-module.exports = { createProgress, printInteresting, printShrinking, printResult, buildJsonResult };
+function printBench({ monoMs, mixedMs, ratio }) {
+  const fmt   = ms => ms === null ? 'n/a' : `${ms.toFixed(0)}ms`;
+  const delta = ratio !== null ? `  Δ=${ratio.toFixed(1)}×` : '';
+  console.log(`[ic-fuzzer] bench: mono=${fmt(monoMs)}  mixed=${fmt(mixedMs)}${delta}`);
+}
+
+module.exports = { createProgress, printInteresting, printShrinking, printResult, printBench, buildJsonResult };
