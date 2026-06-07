@@ -37,7 +37,6 @@ describe('derive()', () => {
 
   test('generated code is valid JS and produces an object', () => {
     for (const s of derive(SEED)) {
-      // eslint-disable-next-line no-new-func
       const fn = new Function(`${s.code}; return ${s.fnName};`)();
       assert.equal(typeof fn, 'function', `${s.name}: code did not produce a function`);
       const obj = fn(0);
@@ -48,7 +47,6 @@ describe('derive()', () => {
   test('sample matches what the code produces', () => {
     for (const s of derive(SEED)) {
       if (s.sample === null) continue; // skip strategies that intentionally produce null
-      // eslint-disable-next-line no-new-func
       const fn  = new Function(`${s.code}; return ${s.fnName};`)();
       const obj = fn(0);
       assert.deepEqual(s.sample, obj, `${s.name}: sample mismatch`);
@@ -59,7 +57,6 @@ describe('derive()', () => {
     const strategies = derive(SEED);
     const canonical = strategies.find(s => s.name === 'literal:type-id-value');
     assert.ok(canonical, 'canonical literal strategy missing');
-    // eslint-disable-next-line no-new-func
     const fn = new Function(`${canonical.code}; return ${canonical.fnName};`)();
     const obj = fn(7);
     assert.equal(obj.type,  'click');
@@ -72,9 +69,7 @@ describe('derive()', () => {
     const literal     = strategies.find(s => s.name === 'literal:type-id-value');
     const incremental = strategies.find(s => s.name === 'incr:type-id-value');
     assert.ok(incremental, 'canonical incremental strategy missing');
-    // eslint-disable-next-line no-new-func
     const litFn  = new Function(`${literal.code};  return ${literal.fnName};`)();
-    // eslint-disable-next-line no-new-func
     const incrFn = new Function(`${incremental.code}; return ${incremental.fnName};`)();
     const litObj  = litFn(3);
     const incrObj = incrFn(3);
@@ -86,7 +81,6 @@ describe('derive()', () => {
     const strategies = derive(SEED);
     const extra = strategies.find(s => s.name === 'extra:_meta');
     assert.ok(extra, 'extra:_meta strategy missing');
-    // eslint-disable-next-line no-new-func
     const fn  = new Function(`${extra.code}; return ${extra.fnName};`)();
     const obj = fn(0);
     assert.ok('_meta' in obj, 'extra field missing');
@@ -97,7 +91,6 @@ describe('derive()', () => {
     const strategies = derive(SEED);
     const omit = strategies.find(s => s.name === 'omit:id');
     assert.ok(omit, 'omit:id strategy missing');
-    // eslint-disable-next-line no-new-func
     const fn  = new Function(`${omit.code}; return ${omit.fnName};`)();
     const obj = fn(0);
     assert.ok(!('id' in obj), 'omitted field still present');
@@ -109,7 +102,6 @@ describe('derive()', () => {
     const strategies = derive(SEED);
     const np = strategies.find(s => s.name === 'null-proto');
     assert.ok(np, 'null-proto strategy missing');
-    // eslint-disable-next-line no-new-func
     const fn  = new Function(`${np.code}; return ${np.fnName};`)();
     const obj = fn(0);
     assert.equal(Object.getPrototypeOf(obj), null);

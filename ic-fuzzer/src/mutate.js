@@ -62,7 +62,6 @@ function permutations(arr, max) {
 // Evaluate a strategy's code string to produce a concrete sample object.
 function evalSample(code, fnName) {
   try {
-    // eslint-disable-next-line no-new-func
     return new Function(`${code}; return ${fnName};`)()(0);
   } catch {
     return null;
