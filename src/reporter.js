@@ -40,7 +40,7 @@ function printShrinking() {
   console.log('\n[ic-fuzzer] shrinking to minimal set...\n');
 }
 
-function printResult({ found, minimalStrategies, ics, numShrinks, rngSeed, targetName, outPath, anyICs, anyMonomorphic, reproduceCmd }) {
+function printResult({ found, minimalStrategies, ics, numShrinks, rngSeed, targetName, outPath, anyICs, anyMonomorphic, numCrashes, reproduceCmd }) {
   if (!found) {
     console.log('');
     if (!anyICs) {
@@ -53,6 +53,9 @@ function printResult({ found, minimalStrategies, ics, numShrinks, rngSeed, targe
       console.log('            Try a corpus of real production payloads for a more thorough check.');
     } else {
       console.log(`[ic-fuzzer] no ${targetName} found after all runs.`);
+    }
+    if (numCrashes > 0) {
+      console.log(`[ic-fuzzer] note: ${numCrashes} probe(s) crashed (use --verbose to see errors)`);
     }
     return;
   }
@@ -91,7 +94,7 @@ function printResult({ found, minimalStrategies, ics, numShrinks, rngSeed, targe
   if (reproduceCmd) console.log(`[ic-fuzzer] reproduce:    ${reproduceCmd}`);
 }
 
-function buildJsonResult({ found, target, minimalStrategies, ics, numShrinks, rngSeed, anyICs, anyMonomorphic, reproduceCmd }) {
+function buildJsonResult({ found, target, minimalStrategies, ics, numShrinks, rngSeed, anyICs, anyMonomorphic, numCrashes, reproduceCmd }) {
   const icSites = (ics || [])
     .filter(ic => ic.severity >= 2)
     .map(ic => {
@@ -121,6 +124,7 @@ function buildJsonResult({ found, target, minimalStrategies, ics, numShrinks, rn
     rngSeed:       rngSeed      ?? null,
     anyICs:        anyICs       ?? false,
     anyMonomorphic: anyMonomorphic ?? false,
+    numCrashes:    numCrashes   ?? 0,
     reproduceCmd:  reproduceCmd ?? null,
   };
 }

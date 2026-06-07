@@ -23,6 +23,8 @@ function parseArgs(argv) {
     target:     'megamorphic',
     rng:        undefined,  // renamed from --seed-rng
     numRuns:    200,
+    count:      undefined,
+    iters:      undefined,
     out:        path.resolve('ic-fuzzer-corpus.json'),
     verbose:    false,
     dryRun:     false,
@@ -37,6 +39,8 @@ function parseArgs(argv) {
     else if (a.startsWith('--target='))     { opts.target = a.slice(9); }
     else if (a.startsWith('--rng='))        { opts.rng = Number(a.slice(6)); }
     else if (a.startsWith('--runs='))       { opts.numRuns = Number(a.slice(7)); }
+    else if (a.startsWith('--count='))      { opts.count = Number(a.slice(8)); }
+    else if (a.startsWith('--iters='))      { opts.iters = Number(a.slice(8)); }
     else if (a.startsWith('--out='))        { opts.out = path.resolve(a.slice(6)); }
     else if (a.startsWith('--watch='))      { opts.watchFile = path.resolve(a.slice(8)); }
     else if (a === '--verbose' || a === '-v') { opts.verbose = true; }
@@ -71,6 +75,8 @@ options:
   --target=<severity>  megamorphic (default) or polymorphic
   --rng=<n>            reproduce a specific run (from a previous --rng= output)
   --runs=<n>           fast-check iteration cap (default: 200)
+  --count=<n>          events per driver iteration (default: 20000)
+  --iters=<n>          number of hot iterations (default: 40)
   --out=<file>         corpus output path (default: ic-fuzzer-corpus.json)
   --watch=<file>       report ICs from this file instead of <file> (use for thin wrappers)
   --dry-run            list derived strategies without running
@@ -147,6 +153,7 @@ examples:
     result = await fuzz({
       fnFile: opts.file, fnName: opts.exportName, strategies, targetSev,
       watchFile: opts.watchFile, seed: opts.rng, numRuns: opts.numRuns,
+      count: opts.count, iters: opts.iters,
       onRun({ error }) {
         if (error && opts.verbose) process.stderr.write(`[ic-fuzzer] driver: ${error}\n`);
       },
@@ -162,6 +169,7 @@ examples:
     result = await fuzz({
       fnFile: opts.file, fnName: opts.exportName, strategies, targetSev,
       watchFile: opts.watchFile, seed: opts.rng, numRuns: opts.numRuns,
+      count: opts.count, iters: opts.iters,
       onRun({ subset, severity, phase, error }) {
         if (error && opts.verbose) process.stderr.write(`[ic-fuzzer] driver: ${error}\n`);
 

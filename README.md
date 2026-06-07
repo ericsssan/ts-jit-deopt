@@ -73,7 +73,71 @@ node bin/ic-fuzzer.js test/fixtures/picomatch-scan-entry.js scanDirect \
   --watch=../node_modules/picomatch/lib/scan.js
 ```
 
-Other flags: `--target=polymorphic`, `--corpus=<file>`, `--dry-run`, `--rng=<n>` (reproduce), `--runs=<n>`.
+Other flags: `--target=polymorphic`, `--corpus=<file>`, `--dry-run`, `--rng=<n>` (reproduce), `--runs=<n>`, `--count=<n>`, `--iters=<n>`.
+
+### Programmatic API
+
+`ic-fuzzer` exposes its full internals as a Node module:
+
+```js
+const { fuzz, probe, derive, fromCorpus, SEV_LABEL } = require('ic-fuzzer');
+```
+
+**`probe(fnFile, fnName, strategies, watchFile?, count?, iters?)` → `{ severity, ics, hasICs, crashed, error }`**
+
+Run one shaped probe and get back raw IC severity. Use this for a CI assertion that a hot path stays monomorphic:
+
+```js
+// ci/monomorphic-gate.js
+const path = require('path');
+const { probe, derive } = require('ic-fuzzer');
+
+const file = path.resolve('src/handler.js');
+const seed = { type: 'click', id: 1, value: 2 };
+
+(async () => {
+  // Five distinct shapes — enough to trigger megamorphism if the IC is polymorphic
+  const five = derive(seed).slice(0, 5);
+  const { severity } = await probe(file, 'handleEvent', five);
+  if (severity >= 3) {
+    console.error(`handleEvent is megamorphic (severity ${severity}) — normalize at the boundary`);
+    process.exit(1);
+  }
+  console.log('handleEvent is JIT-friendly');
+})();
+```
+
+**`fuzz(opts)` → `{ found, minimalStrategies, ics, numShrinks, rngSeed, anyICs, anyMonomorphic, numCrashes }`**
+
+Run the full fast-check search + shrink loop. Useful for fuzzing internal closures or class methods that aren't exported directly — wrap them in a thin harness file:
+
+```js
+// test/fuzz-internal.js
+const path   = require('path');
+const { fuzz, derive } = require('ic-fuzzer');
+
+// harness.js exports a wrapper around the private function under test
+const file = path.resolve('test/fuzz-harness.js');
+
+(async () => {
+  const result = await fuzz({
+    fnFile:     file,
+    fnName:     'processNode',
+    strategies: derive({ type: 'Identifier', name: 'x', start: 0, end: 1 }),
+    targetSev:  3,   // 2 = polymorphic, 3 = megamorphic
+    numRuns:    200,
+    onRun({ subset, severity, phase }) {
+      if (severity >= 3) console.log('  megamorphic:', subset.join(', '));
+    },
+  });
+
+  if (result.found) {
+    console.error(`megamorphic set: ${result.minimalStrategies.map(s => s.name).join(', ')}`);
+    process.exit(1);
+  }
+  console.log('no megamorphism found');
+})();
+```
 
 ---
 

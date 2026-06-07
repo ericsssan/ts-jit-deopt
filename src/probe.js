@@ -44,7 +44,7 @@ function isESMFile(filePath) {
 // Driver builders
 // ---------------------------------------------------------------------------
 
-function buildCJSDriver(fnFile, fnName, strategies) {
+function buildCJSDriver(fnFile, fnName, strategies, count = 20_000, iters = 40) {
   const makerCode = strategies.map(s => s.code).join('\n');
   const makerArr  = `[${strategies.map(s => s.fnName).join(', ')}]`;
   return `'use strict';
@@ -55,18 +55,18 @@ if (typeof _fn !== 'function') {
 }
 ${makerCode}
 const _makers = ${makerArr};
-const _COUNT  = 20_000;
+const _COUNT  = ${count};
 const _events = new Array(_COUNT);
 for (let _i = 0; _i < _COUNT; _i++) _events[_i] = _makers[_i % _makers.length](_i);
 let _acc = 0;
-for (let _iter = 0; _iter < 40; _iter++) {
+for (let _iter = 0; _iter < ${iters}; _iter++) {
   for (let _i = 0; _i < _COUNT; _i++) _acc += _fn(_events[_i]);
 }
 process.stdout.write('checksum=' + _acc + '\\n');
 `;
 }
 
-function buildESMDriver(fnFile, fnName, strategies) {
+function buildESMDriver(fnFile, fnName, strategies, count = 20_000, iters = 40) {
   const makerCode = strategies.map(s => s.code).join('\n');
   const makerArr  = `[${strategies.map(s => s.fnName).join(', ')}]`;
   // Top-level await (.mjs). pathToFileURL handles Windows paths correctly.
@@ -79,11 +79,11 @@ if (typeof _fn !== 'function') {
 }
 ${makerCode}
 const _makers = ${makerArr};
-const _COUNT  = 20_000;
+const _COUNT  = ${count};
 const _events = new Array(_COUNT);
 for (let _i = 0; _i < _COUNT; _i++) _events[_i] = _makers[_i % _makers.length](_i);
 let _acc = 0;
-for (let _iter = 0; _iter < 40; _iter++) {
+for (let _iter = 0; _iter < ${iters}; _iter++) {
   for (let _i = 0; _i < _COUNT; _i++) _acc += _fn(_events[_i]);
 }
 process.stdout.write('checksum=' + _acc + '\\n');
@@ -91,10 +91,10 @@ process.stdout.write('checksum=' + _acc + '\\n');
 }
 
 // Returns { code, filename } — filename is 'driver.mjs' for ESM, 'driver.js' for CJS.
-function buildDriver(fnFile, fnName, strategies) {
+function buildDriver(fnFile, fnName, strategies, count, iters) {
   return isESMFile(fnFile)
-    ? { code: buildESMDriver(fnFile, fnName, strategies), filename: 'driver.mjs' }
-    : { code: buildCJSDriver(fnFile, fnName, strategies), filename: 'driver.js'  };
+    ? { code: buildESMDriver(fnFile, fnName, strategies, count, iters), filename: 'driver.mjs' }
+    : { code: buildCJSDriver(fnFile, fnName, strategies, count, iters), filename: 'driver.js'  };
 }
 
 // ---------------------------------------------------------------------------
@@ -110,14 +110,14 @@ function buildDriver(fnFile, fnName, strategies) {
  *   crashed:  boolean,
  * }}
  */
-async function probe(fnFile, fnName, strategies, watchFile) {
+async function probe(fnFile, fnName, strategies, watchFile, count, iters) {
   if (!strategies.length) return { severity: 0, ics: [], error: null, hasICs: false, crashed: false };
 
   const dir     = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-fuzzer-'));
   const logfile = path.join(dir, 'v8.log');
 
   try {
-    const { code, filename } = buildDriver(fnFile, fnName, strategies);
+    const { code, filename } = buildDriver(fnFile, fnName, strategies, count, iters);
     const driverPath = path.join(dir, filename);
     fs.writeFileSync(driverPath, code);
 
@@ -144,10 +144,11 @@ async function probe(fnFile, fnName, strategies, watchFile) {
     let data;
     try { data = await parseV8Log(logContent); } finally { console.error = origErr; }
 
-    const target = watchFile || fnFile;
-    const parts  = target.replace(/\\/g, '/').split('/');
-    const watchSuffix = parts.slice(-2).join('/');
-    const ics = (data.ics || []).filter(ic => ic.file && ic.file.includes(watchSuffix));
+    const target     = watchFile || fnFile;
+    const targetPath = path.resolve(target);
+    const targetUrl  = pathToFileURL(targetPath).href;
+    // V8 logs CJS files as absolute paths, ESM files as file:// URLs.
+    const ics = (data.ics || []).filter(ic => ic.file === targetPath || ic.file === targetUrl);
 
     const severity = ics.length ? Math.max(...ics.map(ic => ic.severity)) : 0;
     return { severity, ics, error: null, hasICs: ics.length > 0, crashed: false };

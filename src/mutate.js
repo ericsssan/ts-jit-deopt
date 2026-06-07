@@ -17,12 +17,16 @@
 
 const MAX_PERMS = 6;
 
+function isPlainObj(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
 function valExpr(v) {
   switch (typeof v) {
     case 'number':  return 'i';
     case 'string':  return JSON.stringify(v);
     case 'boolean': return String(v);
-    default:        return 'null';
+    default:        return JSON.stringify(v);  // null, array, nested object → inline JSON
   }
 }
 
@@ -74,7 +78,8 @@ function makeStrategy(name, desc, code) {
   return { name, desc, code: code(fnName), fnName, sample };
 }
 
-function derive(seed) {
+// _nested = true disables the recursive nested-variant pass to prevent explosion.
+function derive(seed, _nested = false) {
   if (!seed || typeof seed !== 'object' || Array.isArray(seed)) {
     throw new TypeError('seed must be a plain object');
   }
@@ -125,6 +130,31 @@ function derive(seed) {
     `Object.create(null) + { ${keys.join(', ')} }`,
     fn => nullProtoCode(fn, keys, seed),
   ));
+
+  // For each top-level key whose value is a plain object, generate additional strategies
+  // where that nested object is constructed with shape variance (different property orders,
+  // incremental assignment, etc.). Each variant embeds a renamed nested factory function
+  // alongside the outer factory so both hidden-class axes are exercised independently.
+  if (!_nested) {
+    for (const k of keys) {
+      if (!isPlainObj(seed[k])) continue;
+      const nestedStrats = derive(seed[k], true);
+      for (const ns of nestedStrats) {
+        strategies.push(makeStrategy(
+          `nested:${k}:${ns.name}`,
+          `{ ${keys.join(', ')} }  ${k} → ${ns.desc}`,
+          outerFn => {
+            const innerFn   = `${outerFn}__inner`;
+            const innerCode = ns.code.replace(new RegExp(`\\b${ns.fnName}\\b`, 'g'), innerFn);
+            const entries   = keys.map(k2 =>
+              `${JSON.stringify(k2)}: ${k2 === k ? `${innerFn}(i)` : valExpr(seed[k2])}`
+            ).join(', ');
+            return `${innerCode}\nfunction ${outerFn}(i) { return { ${entries} }; }`;
+          },
+        ));
+      }
+    }
+  }
 
   return strategies;
 }
