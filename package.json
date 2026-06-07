@@ -1,42 +1,23 @@
 {
-  "name": "ts-jit-deopt",
-  "version": "1.0.0",
-  "private": true,
-  "description": "Runnable companion to the article 'From Production Flamegraph to Fixed Megamorphic Call Site': diagnose and fix V8 deoptimizations in Node/TypeScript, with a benchmark, raw V8 deopt/IC tracing, strict TS, JIT-friendliness lint, and a CI deopt-gate.",
+  "name": "ic-fuzzer",
+  "version": "0.1.0",
+  "description": "Discover the minimal input shapes that push V8 inline caches to megamorphic",
+  "keywords": ["v8", "jit", "inline-cache", "megamorphic", "deopt", "fuzzing", "performance"],
   "license": "MIT",
   "author": "Eric San",
-  "keywords": [
-    "v8",
-    "deoptimization",
-    "inline-cache",
-    "megamorphic",
-    "monomorphic",
-    "hidden-class",
-    "jit",
-    "performance",
-    "nodejs",
-    "typescript"
-  ],
+  "bin": { "ic-fuzzer": "./bin/ic-fuzzer.js" },
+  "main": "./src/index.js",
+  "engines": { "node": ">=20" },
   "scripts": {
-    "bench": "node bench.js",
-    "trace:broken": "node --trace-deopt --log-ic broken/drive.js",
-    "trace:fixed": "node --trace-deopt --log-ic fixed/drive.js",
-    "ts": "npx --yes tsx ts/example.ts",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint . --max-warnings=0",
-    "gate": "node ci/deopt-gate.js ci/gate-driver.js fixed",
-    "gate:broken": "node ci/deopt-gate.js ci/gate-driver.js broken",
-    "fuzz": "node fuzzer/run-fuzzer.js",
-    "fuzz:polymorphic": "node fuzzer/run-fuzzer.js --target=polymorphic"
+    "test": "node --test 'test/**/*.test.js'",
+    "lint": "eslint . --max-warnings=0"
+  },
+  "dependencies": {
+    "fast-check": "^4.8.0",
+    "v8-deopt-parser": "^0.4.3"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
     "eslint": "^9.0.0",
-    "fast-check": "^4.8.0",
-    "lodash": "^4.18.1",
-    "minimatch": "^10.2.5",
-    "typescript": "^5.4.0",
-    "typescript-eslint": "^8.0.0",
-    "v8-deopt-parser": "^0.4.3"
+    "picomatch": "^4.0.4"
   }
 }

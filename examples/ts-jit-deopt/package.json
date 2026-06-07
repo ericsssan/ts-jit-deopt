@@ -1,0 +1,27 @@
+{
+  "name": "ts-jit-deopt-example",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Runnable companion to 'From Production Flamegraph to Fixed Megamorphic Call Site'",
+  "license": "MIT",
+  "scripts": {
+    "bench":            "node bench.js",
+    "trace:broken":     "node --trace-deopt --log-ic broken/drive.js",
+    "trace:fixed":      "node --trace-deopt --log-ic fixed/drive.js",
+    "ts":               "npx --yes tsx ts/example.ts",
+    "typecheck":        "tsc --noEmit",
+    "lint":             "eslint . --max-warnings=0",
+    "gate":             "node ci/deopt-gate.js ci/gate-driver.js fixed",
+    "gate:broken":      "node ci/deopt-gate.js ci/gate-driver.js broken",
+    "fuzz":             "node fuzzer/run-fuzzer.js",
+    "fuzz:polymorphic": "node fuzzer/run-fuzzer.js --target=polymorphic"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "eslint": "^9.0.0",
+    "fast-check": "^4.8.0",
+    "typescript": "^5.4.0",
+    "typescript-eslint": "^8.0.0",
+    "v8-deopt-parser": "^0.4.3"
+  }
+}

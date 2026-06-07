@@ -2,5 +2,6 @@ node_modules/
 isolate-*.log
 *.v8.log
 *.cpuprofile
-fuzzer/corpus.json
-ic-fuzzer/ic-fuzzer-corpus.json
+ic-fuzzer-corpus.json
+examples/ts-jit-deopt/node_modules/
+examples/ts-jit-deopt/fuzzer/corpus.json

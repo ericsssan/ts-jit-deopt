@@ -71,7 +71,8 @@ function printResult({ found, minimalStrategies, ics, numShrinks, rngSeed, targe
     console.log(`\n[ic-fuzzer] IC sites at ${targetName}:`);
     for (const ic of failing) {
       const last = ic.updates[ic.updates.length - 1] || {};
-      const loc  = `${path.relative(process.cwd(), ic.file)}:${ic.line}:${ic.column}`;
+      const icPath = ic.file.startsWith('file:') ? new URL(ic.file).pathname : ic.file;
+      const loc    = `${path.relative(process.cwd(), icPath)}:${ic.line}:${ic.column}`;
       console.log(
         `    [${(SEV_LABEL[ic.severity] || '').toUpperCase().padEnd(12)}]` +
         `  .${(last.key || '?').padEnd(10)}  ${ic.functionName}  (${loc})`,

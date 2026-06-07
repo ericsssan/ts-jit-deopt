@@ -102,7 +102,7 @@ examples:
   const targetSev = opts.target === 'polymorphic' ? 2 : 3;
 
   // Validate that the export exists before spending time on fuzzing.
-  const exportErr = validateExport(opts.file, opts.exportName);
+  const exportErr = await validateExport(opts.file, opts.exportName);
   if (exportErr) die(exportErr);
 
   // Derive strategies.
