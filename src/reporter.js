@@ -91,4 +91,38 @@ function printResult({ found, minimalStrategies, ics, numShrinks, rngSeed, targe
   if (reproduceCmd) console.log(`[ic-fuzzer] reproduce:    ${reproduceCmd}`);
 }
 
-module.exports = { createProgress, printInteresting, printShrinking, printResult };
+function buildJsonResult({ found, target, minimalStrategies, ics, numShrinks, rngSeed, anyICs, anyMonomorphic, reproduceCmd }) {
+  const icSites = (ics || [])
+    .filter(ic => ic.severity >= 2)
+    .map(ic => {
+      const rawPath = ic.file.startsWith('file:') ? new URL(ic.file).pathname : ic.file;
+      const last = ic.updates[ic.updates.length - 1] || {};
+      return {
+        file:         path.relative(process.cwd(), rawPath),
+        line:         ic.line,
+        column:       ic.column,
+        functionName: ic.functionName,
+        severity:     ic.severity,
+        severityLabel: (SEV_LABEL[ic.severity] || '').toLowerCase(),
+        key:          last.key || null,
+      };
+    });
+
+  const severity = (ics || []).length ? Math.max(...(ics || []).map(ic => ic.severity)) : 0;
+
+  return {
+    found,
+    severity,
+    severityLabel: (SEV_LABEL[severity] || 'no-ics').toLowerCase(),
+    target,
+    minimalStrategies: (minimalStrategies || []).map(s => ({ name: s.name, desc: s.desc, sample: s.sample ?? null })),
+    ics: icSites,
+    numShrinks:    numShrinks   ?? 0,
+    rngSeed:       rngSeed      ?? null,
+    anyICs:        anyICs       ?? false,
+    anyMonomorphic: anyMonomorphic ?? false,
+    reproduceCmd:  reproduceCmd ?? null,
+  };
+}
+
+module.exports = { createProgress, printInteresting, printShrinking, printResult, buildJsonResult };

@@ -7,7 +7,7 @@ const path = require('path');
 const { derive, fromCorpus }                          = require('../src/mutate');
 const { validateExport }                              = require('../src/probe');
 const { fuzz }                                        = require('../src/fuzzer');
-const { createProgress, printInteresting, printShrinking, printResult } = require('../src/reporter');
+const { createProgress, printInteresting, printShrinking, printResult, buildJsonResult } = require('../src/reporter');
 
 // ---------------------------------------------------------------------------
 // Arg parsing
@@ -26,6 +26,7 @@ function parseArgs(argv) {
     out:        path.resolve('ic-fuzzer-corpus.json'),
     verbose:    false,
     dryRun:     false,
+    json:       false,
     watchFile:  null,
   };
 
@@ -40,6 +41,7 @@ function parseArgs(argv) {
     else if (a.startsWith('--watch='))      { opts.watchFile = path.resolve(a.slice(8)); }
     else if (a === '--verbose' || a === '-v') { opts.verbose = true; }
     else if (a === '--dry-run')             { opts.dryRun = true; }
+    else if (a === '--json')               { opts.json = true; }
     else if (!a.startsWith('-')) {
       if (!opts.file)       opts.file = path.resolve(a);
       else if (!opts.exportName) opts.exportName = a;
@@ -73,6 +75,7 @@ options:
   --watch=<file>       report ICs from this file instead of <file> (use for thin wrappers)
   --dry-run            list derived strategies without running
   --verbose            print driver errors (e.g. from omit strategies that crash)
+  --json               emit a single JSON result object instead of human-readable output
 
 exit codes:
   0   megamorphism found (counterexample in corpus file)
@@ -117,11 +120,13 @@ examples:
 
   const rel = p => path.relative(process.cwd(), p);
 
-  console.log(`[ic-fuzzer] ${opts.exportName}  in  ${rel(opts.file)}`);
-  console.log(
-    `[ic-fuzzer] target: ${opts.target}  |  strategies: ${strategies.length}` +
-    (opts.rng !== undefined ? `  |  rng: ${opts.rng}` : '') + '\n',
-  );
+  if (!opts.json) {
+    console.log(`[ic-fuzzer] ${opts.exportName}  in  ${rel(opts.file)}`);
+    console.log(
+      `[ic-fuzzer] target: ${opts.target}  |  strategies: ${strategies.length}` +
+      (opts.rng !== undefined ? `  |  rng: ${opts.rng}` : '') + '\n',
+    );
+  }
 
   // --dry-run: list strategies and exit.
   if (opts.dryRun) {
@@ -134,42 +139,52 @@ examples:
   }
 
   // Build the full reproduce command for the result footer.
-  const inputFlag   = opts.corpus ? `--corpus=${rel(opts.corpus)}` : `--seed=${JSON.stringify(opts.seed)}`;
+  const inputFlag    = opts.corpus ? `--corpus=${rel(opts.corpus)}` : `--seed=${JSON.stringify(opts.seed)}`;
   const reproduceCmd = (rng) => `ic-fuzzer ${rel(opts.file)} ${opts.exportName} ${inputFlag} --rng=${rng}`;
 
-  const progress = createProgress();
-  let shownShrinking = false;
+  let result;
+  if (opts.json) {
+    result = await fuzz({
+      fnFile: opts.file, fnName: opts.exportName, strategies, targetSev,
+      watchFile: opts.watchFile, seed: opts.rng, numRuns: opts.numRuns,
+      onRun({ error }) {
+        if (error && opts.verbose) process.stderr.write(`[ic-fuzzer] driver: ${error}\n`);
+      },
+    });
+    process.stdout.write(JSON.stringify(
+      buildJsonResult({ ...result, target: opts.target, reproduceCmd: result.found ? reproduceCmd(result.rngSeed) : null }),
+      null, 2,
+    ) + '\n');
+  } else {
+    const progress = createProgress();
+    let shownShrinking = false;
 
-  const result = await fuzz({
-    fnFile:     opts.file,
-    fnName:     opts.exportName,
-    strategies,
-    targetSev,
-    watchFile:  opts.watchFile,
-    seed:       opts.rng,
-    numRuns:    opts.numRuns,
-    onRun({ subset, severity, phase, hasICs, crashed, error }) {
-      if (error && opts.verbose) process.stderr.write(`[ic-fuzzer] driver: ${error}\n`);
+    result = await fuzz({
+      fnFile: opts.file, fnName: opts.exportName, strategies, targetSev,
+      watchFile: opts.watchFile, seed: opts.rng, numRuns: opts.numRuns,
+      onRun({ subset, severity, phase, error }) {
+        if (error && opts.verbose) process.stderr.write(`[ic-fuzzer] driver: ${error}\n`);
 
-      if (phase === 'shrink' && !shownShrinking) {
-        progress.flush();
-        shownShrinking = true;
-        printShrinking();
-      }
+        if (phase === 'shrink' && !shownShrinking) {
+          progress.flush();
+          shownShrinking = true;
+          printShrinking();
+        }
 
-      progress.tick({ severity, phase });
-      if (severity >= targetSev && phase === 'search') printInteresting({ severity, subset });
-    },
-  });
+        progress.tick({ severity, phase });
+        if (severity >= targetSev && phase === 'search') printInteresting({ severity, subset });
+      },
+    });
 
-  progress.flush();
+    progress.flush();
 
-  printResult({
-    ...result,
-    targetName:   opts.target,
-    outPath:      opts.out,
-    reproduceCmd: result.found ? reproduceCmd(result.rngSeed) : null,
-  });
+    printResult({
+      ...result,
+      targetName:   opts.target,
+      outPath:      opts.out,
+      reproduceCmd: result.found ? reproduceCmd(result.rngSeed) : null,
+    });
+  }
 
   // Exit 0 = found (success for a discovery tool), 1 = not found, 2 = error (set above).
   process.exit(result.found ? 0 : 1);
