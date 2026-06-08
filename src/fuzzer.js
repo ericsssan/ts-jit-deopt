@@ -16,28 +16,31 @@ const { probe } = require('./probe');
  * @param {number}   [opts.iters]         number of hot iterations (default: 40)
  * @param {string}   [opts.fnFilter]      filter ICs by function name instead of file path
  * @param {string}   [opts.collectorFile] collector module path (enables collector driver mode)
+ * @param {boolean}  [opts.noTurbofan]    run driver under --no-opt (keep Ignition ICs visible)
  * @param {Function} [opts.onRun]         ({ subset, severity, phase, hasICs, crashed, error })
  *
- * @returns {{ found, minimalStrategies, ics, numShrinks, rngSeed, anyICs, anyMonomorphic, numCrashes }}
+ * @returns {{ found, minimalStrategies, ics, numShrinks, rngSeed, anyICs, anyMonomorphic, anyTurbofan, numCrashes }}
  */
-async function fuzz({ fnFile, fnName, strategies, targetSev, watchFile, seed, numRuns = 200, count, iters, fnFilter, collectorFile, onRun }) {
+async function fuzz({ fnFile, fnName, strategies, targetSev, watchFile, seed, numRuns = 200, count, iters, fnFilter, collectorFile, noTurbofan, onRun }) {
   const names  = strategies.map(s => s.name);
   const byName = Object.fromEntries(strategies.map(s => [s.name, s]));
 
-  let phase        = 'search';
-  let anyICs        = false;
-  let anyMonomorphic = false;
-  let numCrashes     = 0;
+  let phase           = 'search';
+  let anyICs          = false;
+  let anyMonomorphic  = false;
+  let anyTurbofan     = false;
+  let numCrashes      = 0;
 
   const fcResult = await fc.check(
     fc.asyncProperty(
       fc.subarray(names, { minLength: 2 }),
       async (subset) => {
         const selected = subset.map(n => byName[n]);
-        const { severity, error, hasICs, crashed } = await probe(fnFile, fnName, selected, watchFile, count, iters, fnFilter, collectorFile);
+        const { severity, error, hasICs, crashed, turbofanCompiled } = await probe(fnFile, fnName, selected, watchFile, count, iters, fnFilter, collectorFile, noTurbofan);
 
         if (hasICs) anyICs = true;
         if (severity === 1) anyMonomorphic = true;
+        if (turbofanCompiled) anyTurbofan = true;
         if (crashed) numCrashes++;
         if (onRun) onRun({ subset, severity, phase, hasICs, crashed, error });
         if (severity >= targetSev && phase === 'search') phase = 'shrink';
@@ -49,14 +52,14 @@ async function fuzz({ fnFile, fnName, strategies, targetSev, watchFile, seed, nu
   );
 
   if (!fcResult.failed) {
-    return { found: false, minimalStrategies: [], ics: [], numShrinks: 0, rngSeed: fcResult.seed, anyICs, anyMonomorphic, numCrashes };
+    return { found: false, minimalStrategies: [], ics: [], numShrinks: 0, rngSeed: fcResult.seed, anyICs, anyMonomorphic, anyTurbofan, numCrashes };
   }
 
   const minimalNames      = fcResult.counterexample[0];
   const minimalStrategies = minimalNames.map(n => byName[n]);
-  const { ics }           = await probe(fnFile, fnName, minimalStrategies, watchFile, count, iters, fnFilter, collectorFile);
+  const { ics }           = await probe(fnFile, fnName, minimalStrategies, watchFile, count, iters, fnFilter, collectorFile, noTurbofan);
 
-  return { found: true, minimalStrategies, ics, numShrinks: fcResult.numShrinks, rngSeed: fcResult.seed, anyICs, anyMonomorphic, numCrashes };
+  return { found: true, minimalStrategies, ics, numShrinks: fcResult.numShrinks, rngSeed: fcResult.seed, anyICs, anyMonomorphic, anyTurbofan, numCrashes };
 }
 
 module.exports = { fuzz };

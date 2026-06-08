@@ -9,7 +9,7 @@ const { parseV8Log }     = require('v8-deopt-parser');
 
 const SEV_LABEL = { 0: 'no ICs', 1: 'monomorphic', 2: 'polymorphic', 3: 'megamorphic' };
 
-const IC_FLAGS = ['--log-ic', '--log-maps', '--log-code', '--log-source-code'];
+const IC_FLAGS = ['--log-ic', '--log-deopt', '--log-maps', '--log-code', '--log-source-code'];
 
 // ---------------------------------------------------------------------------
 // ESM detection
@@ -186,17 +186,20 @@ function buildCollectorDriver(fnFile, fnName, collectorFile, groupNames, count, 
  * @param {number}      [iters]
  * @param {string}      [fnFilter]       filter ICs by ic.functionName instead of file path
  * @param {string}      [collectorFile]  collector module path (enables collector driver mode)
+ * @param {boolean}     [noTurbofan]     add --no-opt to keep function interpreted (Ignition ICs visible)
  *
  * @returns {{
- *   severity: number,
- *   ics:      object[],
- *   error:    string|null,
- *   hasICs:   boolean,
- *   crashed:  boolean,
+ *   severity:         number,
+ *   ics:              object[],
+ *   deopts:           object[],
+ *   error:            string|null,
+ *   hasICs:           boolean,
+ *   crashed:          boolean,
+ *   turbofanCompiled: boolean,
  * }}
  */
-async function probe(fnFile, fnName, strategies, watchFile, count, iters, fnFilter, collectorFile) {
-  if (!strategies.length) return { severity: 0, ics: [], error: null, hasICs: false, crashed: false };
+async function probe(fnFile, fnName, strategies, watchFile, count, iters, fnFilter, collectorFile, noTurbofan) {
+  if (!strategies.length) return { severity: 0, ics: [], deopts: [], error: null, hasICs: false, crashed: false, turbofanCompiled: false };
 
   const dir     = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-fuzzer-'));
   const logfile = path.join(dir, 'v8.log');
@@ -212,22 +215,19 @@ async function probe(fnFile, fnName, strategies, watchFile, count, iters, fnFilt
     const driverPath = path.join(dir, filename);
     fs.writeFileSync(driverPath, code);
 
-    const result = spawnSync(
-      process.execPath,
-      [...IC_FLAGS, `--logfile=${logfile}`, '--no-logfile-per-isolate', driverPath],
-      { stdio: ['ignore', 'ignore', 'pipe'] },
-    );
+    const nodeArgs = [...IC_FLAGS, ...(noTurbofan ? ['--no-opt'] : []), `--logfile=${logfile}`, '--no-logfile-per-isolate', driverPath];
+    const result = spawnSync(process.execPath, nodeArgs, { stdio: ['ignore', 'ignore', 'pipe'] });
 
     if (result.status !== 0) {
       return {
-        severity: 0, ics: [], hasICs: false, crashed: true,
+        severity: 0, ics: [], deopts: [], hasICs: false, crashed: true, turbofanCompiled: false,
         error: (result.stderr || '').toString().trim(),
       };
     }
 
     let logContent;
     try { logContent = fs.readFileSync(logfile, 'utf8'); } catch {
-      return { severity: 0, ics: [], error: 'log file not written', hasICs: false, crashed: false };
+      return { severity: 0, ics: [], deopts: [], error: 'log file not written', hasICs: false, crashed: false, turbofanCompiled: false };
     }
 
     const origErr = console.error;
@@ -235,29 +235,38 @@ async function probe(fnFile, fnName, strategies, watchFile, count, iters, fnFilt
     let data;
     try { data = await parseV8Log(logContent); } finally { console.error = origErr; }
 
-    let ics;
-    if (fnFilter) {
-      // Filter by function name — stable across platforms, survives symlinks and inlining.
-      // If --watch is also provided, use it as a secondary file-path filter.
-      ics = (data.ics || []).filter(ic => {
-        if (ic.functionName !== fnFilter) return false;
-        if (watchFile) {
-          const targetPath = path.resolve(watchFile);
-          const targetUrl  = pathToFileURL(targetPath).href;
-          return ic.file === targetPath || ic.file === targetUrl;
+    // Compute target path/URL once for IC and deopt filtering.
+    const _target     = watchFile || fnFile;
+    const _targetPath = path.resolve(_target);
+    const _targetUrl  = pathToFileURL(_targetPath).href;
+    const _matchesFile = (entry) => entry.file === _targetPath || entry.file === _targetUrl;
+
+    const _matchesWatch = watchFile
+      ? (entry) => {
+          const wp = path.resolve(watchFile);
+          const wu = pathToFileURL(wp).href;
+          return entry.file === wp || entry.file === wu;
         }
-        return true;
-      });
-    } else {
-      // Default: filter by resolved file path. V8 logs CJS as absolute paths, ESM as file:// URLs.
-      const target     = watchFile || fnFile;
-      const targetPath = path.resolve(target);
-      const targetUrl  = pathToFileURL(targetPath).href;
-      ics = (data.ics || []).filter(ic => ic.file === targetPath || ic.file === targetUrl);
+      : () => true;
+
+    function filterEntries(list) {
+      if (fnFilter) {
+        return list.filter(e => e.functionName === fnFilter && _matchesWatch(e));
+      }
+      return list.filter(e => _matchesFile(e));
     }
 
-    const severity = ics.length ? Math.max(...ics.map(ic => ic.severity)) : 0;
-    return { severity, ics, error: null, hasICs: ics.length > 0, crashed: false };
+    const ics   = filterEntries(data.ics   || []);
+    const deopts = filterEntries(data.deopts || []);
+
+    // Turbofan-compiled functions emit IC updates with newState === 'no_feedback' (X).
+    // These have severity -1 (UNKNOWN_SEVERITY) and don't represent observable IC state.
+    const turbofanCompiled = ics.some(ic => (ic.updates || []).some(u => u.newState === 'no_feedback'));
+    // hasICs = at least one IC site with meaningful severity (1 = mono, 2 = poly, 3 = mega).
+    const hasICs   = ics.some(ic => ic.severity >= 1);
+    const severity = hasICs ? Math.max(...ics.filter(ic => ic.severity >= 1).map(ic => ic.severity)) : 0;
+
+    return { severity, ics, deopts, error: null, hasICs, crashed: false, turbofanCompiled };
 
   } finally {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }

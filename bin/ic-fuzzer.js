@@ -6,10 +6,10 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 
 const { derive, fromCorpus }                          = require('../src/mutate');
-const { validateExport, isESMFile }                   = require('../src/probe');
+const { probe, validateExport, isESMFile }            = require('../src/probe');
 const { fuzz }                                        = require('../src/fuzzer');
 const { bench }                                       = require('../src/bench');
-const { createProgress, printInteresting, printShrinking, printResult, printBench, buildJsonResult, distinctMapCount } = require('../src/reporter');
+const { createProgress, printInteresting, printShrinking, printResult, printBench, printDeopts, buildJsonResult, distinctMapCount } = require('../src/reporter');
 
 // ---------------------------------------------------------------------------
 // Arg parsing
@@ -40,7 +40,9 @@ function parseArgs(argv) {
     benchMode:     false,  // --bench
     reportMaps:    false,  // --report-maps
     traceReads:    false,  // --trace-reads
+    traceDeopt:    false,  // --trace-deopt
     maxMaps:       null,   // --max-maps=N
+    noTurbofan:    false,  // --no-turbofan
   };
 
   for (const a of args) {
@@ -61,6 +63,8 @@ function parseArgs(argv) {
     else if (a === '--bench')                 { opts.benchMode = true; }
     else if (a === '--report-maps')           { opts.reportMaps = true; }
     else if (a === '--trace-reads')           { opts.traceReads = true; }
+    else if (a === '--trace-deopt')           { opts.traceDeopt = true; }
+    else if (a === '--no-turbofan')           { opts.noTurbofan = true; }
     else if (a === '--verbose' || a === '-v') { opts.verbose = true; }
     else if (a === '--dry-run')               { opts.dryRun = true; }
     else if (a === '--json')                  { opts.json = true; }
@@ -103,9 +107,11 @@ options:
   --assert-max=<severity>  gate mode: exit 0 if clean, exit 1 if any IC exceeds severity
                            severity: monomorphic | polymorphic
   --max-maps=N             gate mode: exit 1 if any IC site has more than N distinct hidden classes
+  --no-turbofan            run driver under --no-opt to keep function interpreted (Ignition ICs visible)
   --bench                  timing mode: compare mono-shape vs mixed-shape performance
   --report-maps            show distinct hidden-class count per IC site
   --trace-reads            dry-run: show which properties the function reads from the seed
+  --trace-deopt            dry-run: show deoptimization events for the function
   --dry-run                list derived strategies without running
   --verbose                print driver errors (e.g. from omit strategies that crash)
   --json                   emit a single JSON result object instead of human-readable output
@@ -130,6 +136,8 @@ examples:
   ic-fuzzer ./handler.js handleEvent --seed='...' --max-maps=4
   ic-fuzzer ./handler.js handleEvent --seed='...' --report-maps
   ic-fuzzer ./handler.js handleEvent --seed='...' --trace-reads
+  ic-fuzzer ./handler.js handleEvent --seed='...' --trace-deopt
+  ic-fuzzer ./handler.js handleEvent --seed='...' --no-turbofan
   ic-fuzzer ./handler.js handleEvent --seed='...' --function=handleEvent
   ic-fuzzer ./handler.js handleEvent --seed='...' --bench
 `);
@@ -171,9 +179,9 @@ async function runTraceReads(fnFile, fnName, seed, json) {
 
   try { fn(p); } catch { /* ignore — we only care about property accesses */ }
 
-  const seedKeys   = Object.keys(seed);
-  const readKeys   = [...new Set(accessed)];
-  const unread     = seedKeys.filter(k => !readKeys.some(r => r === k || r.startsWith(k + '.')));
+  const seedKeys = Object.keys(seed);
+  const readKeys = [...new Set(accessed)];
+  const unread   = seedKeys.filter(k => !readKeys.some(r => r === k || r.startsWith(k + '.')));
 
   if (json) {
     process.stdout.write(JSON.stringify({ fn: fnName, file: fnFile, reads: readKeys, unread }, null, 2) + '\n');
@@ -224,7 +232,6 @@ async function runTraceReads(fnFile, fnName, seed, json) {
   // Derive strategies.
   let strategies;
   if (opts.collectorFile) {
-    // Load the collector module to discover group names (strategies = group name stubs).
     let allGroups;
     if (isESMFile(opts.collectorFile)) {
       const mod = await import(pathToFileURL(opts.collectorFile).href);
@@ -239,8 +246,6 @@ async function runTraceReads(fnFile, fnName, seed, json) {
     }
     const groupNames = Object.keys(allGroups || {});
     if (!groupNames.length) die('collector returned no groups');
-    // Create minimal strategy stubs so fast-check can subarray them.
-    // The actual objects come from the driver; stubs carry only the name.
     strategies = groupNames.map(name => ({ name, fnName: name, code: '', desc: `group: ${name}`, sample: null }));
   } else if (opts.corpus) {
     if (!fs.existsSync(opts.corpus)) die(`corpus file not found: ${opts.corpus}`);
@@ -288,6 +293,21 @@ async function runTraceReads(fnFile, fnName, seed, json) {
     process.exit(0);
   }
 
+  // --trace-deopt: run a single probe with all strategies, show deopt events.
+  if (opts.traceDeopt) {
+    if (!opts.json) {
+      console.log(`[ic-fuzzer] trace-deopt: strategies=${strategies.length}  count=${opts.count ?? 20000}  iters=${opts.iters ?? 40}`);
+      if (opts.noTurbofan) console.log('[ic-fuzzer] running under --no-opt (Turbofan disabled)\n');
+    }
+    const { deopts } = await probe(
+      opts.file, opts.exportName, strategies,
+      opts.watchFile, opts.count, opts.iters,
+      opts.fnFilter, opts.collectorFile, opts.noTurbofan,
+    );
+    printDeopts(deopts, opts.exportName, opts.file, opts.json);
+    process.exit(0);
+  }
+
   // --assert-max: gate mode — inverted exit codes (0 = clean, 1 = violation).
   const assertMaxSev = opts.assertMax ? ASSERT_MAX_MAP[opts.assertMax] : null;
   const targetSev    = assertMaxSev !== null ? assertMaxSev + 1
@@ -300,9 +320,10 @@ async function runTraceReads(fnFile, fnName, seed, json) {
     const modeLabel = opts.assertMax ? `assert-max: ${opts.assertMax}`
       : opts.maxMaps !== null       ? `max-maps: ${opts.maxMaps}`
       : `target: ${opts.target}`;
+    const tfLabel = opts.noTurbofan ? '  |  --no-turbofan' : '';
     console.log(
       `[ic-fuzzer] ${modeLabel}  |  strategies: ${strategies.length}` +
-      (opts.rng !== undefined ? `  |  rng: ${opts.rng}` : '') + '\n',
+      (opts.rng !== undefined ? `  |  rng: ${opts.rng}` : '') + tfLabel + '\n',
     );
   }
 
@@ -310,7 +331,8 @@ async function runTraceReads(fnFile, fnName, seed, json) {
   const inputFlag = opts.collectorFile ? `--collector=${rel(opts.collectorFile)}`
     : opts.corpus                      ? `--corpus=${rel(opts.corpus)}`
     : `--seed=${JSON.stringify(opts.seed)}`;
-  const reproduceCmd = (rng) => `ic-fuzzer ${rel(opts.file)} ${opts.exportName} ${inputFlag} --rng=${rng}`;
+  const noTfFlag  = opts.noTurbofan ? ' --no-turbofan' : '';
+  const reproduceCmd = (rng) => `ic-fuzzer ${rel(opts.file)} ${opts.exportName} ${inputFlag} --rng=${rng}${noTfFlag}`;
 
   let result;
   if (opts.json) {
@@ -318,7 +340,7 @@ async function runTraceReads(fnFile, fnName, seed, json) {
       fnFile: opts.file, fnName: opts.exportName, strategies, targetSev,
       watchFile: opts.watchFile, seed: opts.rng, numRuns: opts.numRuns,
       count: opts.count, iters: opts.iters,
-      fnFilter: opts.fnFilter, collectorFile: opts.collectorFile,
+      fnFilter: opts.fnFilter, collectorFile: opts.collectorFile, noTurbofan: opts.noTurbofan,
       onRun({ error }) {
         if (error && opts.verbose) process.stderr.write(`[ic-fuzzer] driver: ${error}\n`);
       },
@@ -335,7 +357,7 @@ async function runTraceReads(fnFile, fnName, seed, json) {
       fnFile: opts.file, fnName: opts.exportName, strategies, targetSev,
       watchFile: opts.watchFile, seed: opts.rng, numRuns: opts.numRuns,
       count: opts.count, iters: opts.iters,
-      fnFilter: opts.fnFilter, collectorFile: opts.collectorFile,
+      fnFilter: opts.fnFilter, collectorFile: opts.collectorFile, noTurbofan: opts.noTurbofan,
       onRun({ subset, severity, phase, error }) {
         if (error && opts.verbose) process.stderr.write(`[ic-fuzzer] driver: ${error}\n`);
 
@@ -385,11 +407,9 @@ async function runTraceReads(fnFile, fnName, seed, json) {
   if (assertMaxSev !== null) {
     process.exit(result.found ? 1 : 0);
   } else if (opts.maxMaps !== null) {
-    // Violation if found AND any IC site exceeds the limit.
     const maxFound = result.found ? Math.max(...(result.ics || []).map(distinctMapCount)) : 0;
     process.exit(result.found && maxFound > opts.maxMaps ? 1 : 0);
   } else {
-    // Discovery mode: exit 0 = found, exit 1 = not found.
     process.exit(result.found ? 0 : 1);
   }
 })();

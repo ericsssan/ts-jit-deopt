@@ -44,19 +44,26 @@ function distinctMapCount(ic) {
   return new Set((ic.updates || []).map(u => u.map).filter(Boolean)).size;
 }
 
-function printResult({ found, minimalStrategies, ics, numShrinks, rngSeed, targetName, outPath, anyICs, anyMonomorphic, numCrashes, reproduceCmd, reportMaps }) {
+function printResult({ found, minimalStrategies, ics, numShrinks, rngSeed, targetName, outPath, anyICs, anyMonomorphic, anyTurbofan, numCrashes, reproduceCmd, reportMaps }) {
   if (!found) {
     console.log('');
-    if (!anyICs) {
+    if (!anyICs && !anyTurbofan) {
       console.log('[ic-fuzzer] no IC data observed for this function.');
       console.log('            The seed may not match the properties your function actually reads,');
       console.log('            or the function does not use property accesses on its argument.');
+    } else if (anyTurbofan && !anyICs) {
+      console.log('[ic-fuzzer] function is Turbofan-compiled — IC sites show no_feedback (X).');
+      console.log('            V8 has already optimized this function; IC transitions are no longer logged.');
+      console.log('            Use --no-turbofan to keep the function interpreted and observe baseline ICs.');
     } else if (anyMonomorphic) {
       console.log(`[ic-fuzzer] no ${targetName} found — all probes stayed monomorphic or below.`);
       console.log('            The function appears JIT-friendly with this input variety.');
       console.log('            Try a corpus of real production payloads for a more thorough check.');
     } else {
       console.log(`[ic-fuzzer] no ${targetName} found after all runs.`);
+    }
+    if (anyTurbofan && anyICs) {
+      console.log('[ic-fuzzer] note: some probes had Turbofan-compiled ICs (no_feedback); use --no-turbofan for full IC observability');
     }
     if (numCrashes > 0) {
       console.log(`[ic-fuzzer] note: ${numCrashes} probe(s) crashed (use --verbose to see errors)`);
@@ -99,7 +106,7 @@ function printResult({ found, minimalStrategies, ics, numShrinks, rngSeed, targe
   if (reproduceCmd) console.log(`[ic-fuzzer] reproduce:    ${reproduceCmd}`);
 }
 
-function buildJsonResult({ found, target, minimalStrategies, ics, numShrinks, rngSeed, anyICs, anyMonomorphic, numCrashes, reproduceCmd }) {
+function buildJsonResult({ found, target, minimalStrategies, ics, numShrinks, rngSeed, anyICs, anyMonomorphic, anyTurbofan, numCrashes, reproduceCmd }) {
   const icSites = (ics || [])
     .filter(ic => ic.severity >= 2)
     .map(ic => {
@@ -128,11 +135,54 @@ function buildJsonResult({ found, target, minimalStrategies, ics, numShrinks, rn
     ics: icSites,
     numShrinks:    numShrinks   ?? 0,
     rngSeed:       rngSeed      ?? null,
-    anyICs:        anyICs       ?? false,
+    anyICs:         anyICs         ?? false,
     anyMonomorphic: anyMonomorphic ?? false,
-    numCrashes:    numCrashes   ?? 0,
+    anyTurbofan:    anyTurbofan    ?? false,
+    numCrashes:     numCrashes     ?? 0,
     reproduceCmd:  reproduceCmd ?? null,
   };
+}
+
+function printDeopts(deopts, fnName, filePath, json) {
+  const rel = f => {
+    const p = f.startsWith('file:') ? new URL(f).pathname : f;
+    return path.relative(process.cwd(), p);
+  };
+
+  if (json) {
+    const out = (deopts || []).map(d => {
+      const last = d.updates[d.updates.length - 1] || {};
+      return {
+        functionName: d.functionName,
+        file: rel(d.file),
+        line: d.line,
+        column: d.column,
+        severity: d.severity,
+        events: d.updates.length,
+        bailoutType: last.bailoutType || null,
+        deoptReason: last.deoptReason || null,
+      };
+    });
+    process.stdout.write(JSON.stringify({ fn: fnName, file: rel(filePath), deopts: out }, null, 2) + '\n');
+    return;
+  }
+
+  console.log(`[ic-fuzzer] trace-deopt: ${fnName}  in  ${path.relative(process.cwd(), filePath)}\n`);
+  if (!deopts || !deopts.length) {
+    console.log('  no deoptimizations observed');
+    return;
+  }
+  for (const d of deopts) {
+    const loc  = `${rel(d.file)}:${d.line}:${d.column}`;
+    const last = d.updates[d.updates.length - 1] || {};
+    const tag  = (last.bailoutType || 'deopt').toUpperCase().padEnd(12);
+    console.log(`  [${tag}]  ${d.functionName}  (${loc})  ×${d.updates.length}`);
+    for (const u of d.updates) {
+      const reason = u.deoptReason || '(unknown reason)';
+      const type   = u.bailoutType ? `  [${u.bailoutType}]` : '';
+      console.log(`      ${reason}${type}`);
+    }
+  }
 }
 
 function printBench({ monoMs, mixedMs, ratio }) {
@@ -141,4 +191,4 @@ function printBench({ monoMs, mixedMs, ratio }) {
   console.log(`[ic-fuzzer] bench: mono=${fmt(monoMs)}  mixed=${fmt(mixedMs)}${delta}`);
 }
 
-module.exports = { createProgress, printInteresting, printShrinking, printResult, printBench, buildJsonResult, distinctMapCount };
+module.exports = { createProgress, printInteresting, printShrinking, printResult, printBench, printDeopts, buildJsonResult, distinctMapCount };

@@ -44,6 +44,28 @@ npm run ts             # the TypeScript version
 
 This repo also ships `ic-fuzzer`, a tool that finds the minimal set of object shapes that push a function's inline caches to megamorphic. It uses IC severity — not crashes or coverage — as the feedback signal, which makes it novel: no existing fuzzer does this.
 
+### How V8 executes your code
+
+V8 runs JavaScript in three tiers:
+
+```
+Ignition (interpreter) → Maglev (mid-tier JIT) → Turbofan (optimizing compiler)
+```
+
+At each property access (`.type`, `.id`, etc.), **Ignition** maintains an **inline cache (IC)** — a record of which object shapes (hidden classes) that site has seen. `monomorphic` = 1 shape, `polymorphic` = 2–4, `megamorphic` = 5+.
+
+When a function gets hot, **Turbofan** reads the IC feedback Ignition collected, then *replaces* the IC with specialized machine code. Monomorphic feedback → direct memory load (fast). Megamorphic feedback → generic hash-table lookup (slow, but still "optimized").
+
+**ic-fuzzer's purpose:** find input shapes that push a call site to megamorphic *during Ignition*, before Turbofan reads the accumulated feedback. The ICs disappear after Turbofan compiles — but their legacy is baked into the generated machine code. Megamorphic IC feedback causes Turbofan to emit permanently slower code.
+
+**What "no IC data" means:**
+
+| Situation | Cause | What to do |
+|---|---|---|
+| Function never called | Wrong export name, or seed doesn't trigger the call path | Fix the seed |
+| `X`/no_feedback state | Turbofan compiled before the probe ran; IC sites replaced by specialized code | Use `--no-turbofan` to observe Ignition-phase ICs |
+| No property accesses | Function doesn't read properties on its argument | ic-fuzzer doesn't apply |
+
 ```bash
 cd ic-fuzzer
 node bin/ic-fuzzer.js ../broken/handler.js handleEvent \
@@ -73,7 +95,7 @@ node bin/ic-fuzzer.js test/fixtures/picomatch-scan-entry.js scanDirect \
   --watch=../node_modules/picomatch/lib/scan.js
 ```
 
-Other flags: `--target=polymorphic`, `--corpus=<file>`, `--dry-run`, `--rng=<n>` (reproduce), `--runs=<n>`, `--count=<n>`, `--iters=<n>`.
+Other flags: `--target=polymorphic`, `--corpus=<file>`, `--collector=<file>`, `--dry-run`, `--rng=<n>` (reproduce), `--runs=<n>`, `--count=<n>`, `--iters=<n>`, `--function=<name>`, `--report-maps`, `--trace-reads`, `--trace-deopt`, `--no-turbofan`, `--max-maps=N`.
 
 ### The full optimization workflow
 
