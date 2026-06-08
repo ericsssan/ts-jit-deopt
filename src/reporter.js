@@ -40,7 +40,11 @@ function printShrinking() {
   console.log('\n[ic-fuzzer] shrinking to minimal set...\n');
 }
 
-function printResult({ found, minimalStrategies, ics, numShrinks, rngSeed, targetName, outPath, anyICs, anyMonomorphic, numCrashes, reproduceCmd }) {
+function distinctMapCount(ic) {
+  return new Set((ic.updates || []).map(u => u.map).filter(Boolean)).size;
+}
+
+function printResult({ found, minimalStrategies, ics, numShrinks, rngSeed, targetName, outPath, anyICs, anyMonomorphic, numCrashes, reproduceCmd, reportMaps }) {
   if (!found) {
     console.log('');
     if (!anyICs) {
@@ -76,9 +80,10 @@ function printResult({ found, minimalStrategies, ics, numShrinks, rngSeed, targe
       const last = ic.updates[ic.updates.length - 1] || {};
       const icPath = ic.file.startsWith('file:') ? new URL(ic.file).pathname : ic.file;
       const loc    = `${path.relative(process.cwd(), icPath)}:${ic.line}:${ic.column}`;
+      const mapsStr = reportMaps ? `  maps=${distinctMapCount(ic)}` : '';
       console.log(
         `    [${(SEV_LABEL[ic.severity] || '').toUpperCase().padEnd(12)}]` +
-        `  .${(last.key || '?').padEnd(10)}  ${ic.functionName}  (${loc})`,
+        `  .${(last.key || '?').padEnd(10)}  ${ic.functionName}  (${loc})${mapsStr}`,
       );
     }
   }
@@ -108,6 +113,7 @@ function buildJsonResult({ found, target, minimalStrategies, ics, numShrinks, rn
         severity:     ic.severity,
         severityLabel: (SEV_LABEL[ic.severity] || '').toLowerCase(),
         key:          last.key || null,
+        distinctMaps: distinctMapCount(ic),
       };
     });
 
@@ -135,4 +141,4 @@ function printBench({ monoMs, mixedMs, ratio }) {
   console.log(`[ic-fuzzer] bench: mono=${fmt(monoMs)}  mixed=${fmt(mixedMs)}${delta}`);
 }
 
-module.exports = { createProgress, printInteresting, printShrinking, printResult, printBench, buildJsonResult };
+module.exports = { createProgress, printInteresting, printShrinking, printResult, printBench, buildJsonResult, distinctMapCount };

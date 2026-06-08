@@ -41,7 +41,7 @@ function isESMFile(filePath) {
 }
 
 // ---------------------------------------------------------------------------
-// Driver builders
+// Driver builders — strategy mode (maker functions)
 // ---------------------------------------------------------------------------
 
 function buildCJSDriver(fnFile, fnName, strategies, count = 20_000, iters = 40) {
@@ -98,10 +98,95 @@ function buildDriver(fnFile, fnName, strategies, count, iters) {
 }
 
 // ---------------------------------------------------------------------------
+// Driver builders — collector mode (real objects from external module)
+// ---------------------------------------------------------------------------
+
+function buildCollectorCJSDriver(fnFile, fnName, collectorFile, groupNames, count = 20_000, iters = 40) {
+  return `'use strict';
+const _fn = require(${JSON.stringify(fnFile)})[${JSON.stringify(fnName)}];
+if (typeof _fn !== 'function') {
+  process.stderr.write('ic-fuzzer: export "' + ${JSON.stringify(fnName)} + '" is not a function\\n');
+  process.exit(2);
+}
+const _coll = require(${JSON.stringify(collectorFile)});
+const _collectFn = typeof _coll.collect === 'function' ? _coll.collect : _coll.default?.collect;
+(async () => {
+  const _allGroups = await _collectFn();
+  const _names  = ${JSON.stringify(groupNames)};
+  const _groups = _names.map(n => Array.isArray(_allGroups[n]) ? _allGroups[n] : []).filter(g => g.length > 0);
+  if (!_groups.length) {
+    process.stderr.write('ic-fuzzer: collector returned no objects for selected groups\\n');
+    process.exit(1);
+  }
+  const _COUNT  = ${count};
+  const _events = new Array(_COUNT);
+  for (let _i = 0; _i < _COUNT; _i++) {
+    const _g = _groups[_i % _groups.length];
+    _events[_i] = _g[_i % _g.length];
+  }
+  let _acc = 0;
+  for (let _iter = 0; _iter < ${iters}; _iter++) {
+    for (let _i = 0; _i < _COUNT; _i++) _acc += _fn(_events[_i]);
+  }
+  process.stdout.write('checksum=' + _acc + '\\n');
+})();
+`;
+}
+
+function buildCollectorESMDriver(fnFile, fnName, collectorFile, groupNames, count = 20_000, iters = 40) {
+  const fnUrl   = pathToFileURL(fnFile).href;
+  const collUrl = pathToFileURL(collectorFile).href;
+  return `const _modFn  = await import(${JSON.stringify(fnUrl)});
+const _fn     = _modFn[${JSON.stringify(fnName)}] ?? _modFn.default?.[${JSON.stringify(fnName)}];
+if (typeof _fn !== 'function') {
+  process.stderr.write('ic-fuzzer: export "' + ${JSON.stringify(fnName)} + '" is not a function\\n');
+  process.exit(2);
+}
+const _modColl   = await import(${JSON.stringify(collUrl)});
+const _collectFn = _modColl.collect ?? _modColl.default?.collect;
+const _allGroups = await _collectFn();
+const _names  = ${JSON.stringify(groupNames)};
+const _groups = _names.map(n => Array.isArray(_allGroups[n]) ? _allGroups[n] : []).filter(g => g.length > 0);
+if (!_groups.length) {
+  process.stderr.write('ic-fuzzer: collector returned no objects for selected groups\\n');
+  process.exit(1);
+}
+const _COUNT  = ${count};
+const _events = new Array(_COUNT);
+for (let _i = 0; _i < _COUNT; _i++) {
+  const _g = _groups[_i % _groups.length];
+  _events[_i] = _g[_i % _g.length];
+}
+let _acc = 0;
+for (let _iter = 0; _iter < ${iters}; _iter++) {
+  for (let _i = 0; _i < _COUNT; _i++) _acc += _fn(_events[_i]);
+}
+process.stdout.write('checksum=' + _acc + '\\n');
+`;
+}
+
+// Use ESM driver when either the target or collector is an ES module.
+function buildCollectorDriver(fnFile, fnName, collectorFile, groupNames, count, iters) {
+  const useESM = isESMFile(fnFile) || isESMFile(collectorFile);
+  return useESM
+    ? { code: buildCollectorESMDriver(fnFile, fnName, collectorFile, groupNames, count, iters), filename: 'driver.mjs' }
+    : { code: buildCollectorCJSDriver(fnFile, fnName, collectorFile, groupNames, count, iters), filename: 'driver.js'  };
+}
+
+// ---------------------------------------------------------------------------
 // probe()
 // ---------------------------------------------------------------------------
 
 /**
+ * @param {string}      fnFile
+ * @param {string}      fnName
+ * @param {object[]}    strategies
+ * @param {string}      [watchFile]      file to filter ICs by path (default: fnFile)
+ * @param {number}      [count]
+ * @param {number}      [iters]
+ * @param {string}      [fnFilter]       filter ICs by ic.functionName instead of file path
+ * @param {string}      [collectorFile]  collector module path (enables collector driver mode)
+ *
  * @returns {{
  *   severity: number,
  *   ics:      object[],
@@ -110,14 +195,20 @@ function buildDriver(fnFile, fnName, strategies, count, iters) {
  *   crashed:  boolean,
  * }}
  */
-async function probe(fnFile, fnName, strategies, watchFile, count, iters) {
+async function probe(fnFile, fnName, strategies, watchFile, count, iters, fnFilter, collectorFile) {
   if (!strategies.length) return { severity: 0, ics: [], error: null, hasICs: false, crashed: false };
 
   const dir     = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-fuzzer-'));
   const logfile = path.join(dir, 'v8.log');
 
   try {
-    const { code, filename } = buildDriver(fnFile, fnName, strategies, count, iters);
+    let code, filename;
+    if (collectorFile) {
+      const groupNames = strategies.map(s => s.name);
+      ({ code, filename } = buildCollectorDriver(fnFile, fnName, collectorFile, groupNames, count, iters));
+    } else {
+      ({ code, filename } = buildDriver(fnFile, fnName, strategies, count, iters));
+    }
     const driverPath = path.join(dir, filename);
     fs.writeFileSync(driverPath, code);
 
@@ -144,11 +235,26 @@ async function probe(fnFile, fnName, strategies, watchFile, count, iters) {
     let data;
     try { data = await parseV8Log(logContent); } finally { console.error = origErr; }
 
-    const target     = watchFile || fnFile;
-    const targetPath = path.resolve(target);
-    const targetUrl  = pathToFileURL(targetPath).href;
-    // V8 logs CJS files as absolute paths, ESM files as file:// URLs.
-    const ics = (data.ics || []).filter(ic => ic.file === targetPath || ic.file === targetUrl);
+    let ics;
+    if (fnFilter) {
+      // Filter by function name — stable across platforms, survives symlinks and inlining.
+      // If --watch is also provided, use it as a secondary file-path filter.
+      ics = (data.ics || []).filter(ic => {
+        if (ic.functionName !== fnFilter) return false;
+        if (watchFile) {
+          const targetPath = path.resolve(watchFile);
+          const targetUrl  = pathToFileURL(targetPath).href;
+          return ic.file === targetPath || ic.file === targetUrl;
+        }
+        return true;
+      });
+    } else {
+      // Default: filter by resolved file path. V8 logs CJS as absolute paths, ESM as file:// URLs.
+      const target     = watchFile || fnFile;
+      const targetPath = path.resolve(target);
+      const targetUrl  = pathToFileURL(targetPath).href;
+      ics = (data.ics || []).filter(ic => ic.file === targetPath || ic.file === targetUrl);
+    }
 
     const severity = ics.length ? Math.max(...ics.map(ic => ic.severity)) : 0;
     return { severity, ics, error: null, hasICs: ics.length > 0, crashed: false };

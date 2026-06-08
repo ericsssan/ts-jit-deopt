@@ -9,16 +9,18 @@ const { probe } = require('./probe');
  * @param {string}   opts.fnName
  * @param {object[]} opts.strategies
  * @param {number}   opts.targetSev    2 = polymorphic, 3 = megamorphic
- * @param {string}   [opts.watchFile]  alternative file to watch for ICs (default: fnFile)
- * @param {number}   [opts.seed]       fast-check RNG seed
+ * @param {string}   [opts.watchFile]     alternative file to watch for ICs (default: fnFile)
+ * @param {number}   [opts.seed]          fast-check RNG seed
  * @param {number}   [opts.numRuns]
- * @param {number}   [opts.count]      events per driver iteration (default: 20000)
- * @param {number}   [opts.iters]      number of hot iterations (default: 40)
- * @param {Function} [opts.onRun]      ({ subset, severity, phase, hasICs, crashed, error })
+ * @param {number}   [opts.count]         events per driver iteration (default: 20000)
+ * @param {number}   [opts.iters]         number of hot iterations (default: 40)
+ * @param {string}   [opts.fnFilter]      filter ICs by function name instead of file path
+ * @param {string}   [opts.collectorFile] collector module path (enables collector driver mode)
+ * @param {Function} [opts.onRun]         ({ subset, severity, phase, hasICs, crashed, error })
  *
  * @returns {{ found, minimalStrategies, ics, numShrinks, rngSeed, anyICs, anyMonomorphic, numCrashes }}
  */
-async function fuzz({ fnFile, fnName, strategies, targetSev, watchFile, seed, numRuns = 200, count, iters, onRun }) {
+async function fuzz({ fnFile, fnName, strategies, targetSev, watchFile, seed, numRuns = 200, count, iters, fnFilter, collectorFile, onRun }) {
   const names  = strategies.map(s => s.name);
   const byName = Object.fromEntries(strategies.map(s => [s.name, s]));
 
@@ -32,7 +34,7 @@ async function fuzz({ fnFile, fnName, strategies, targetSev, watchFile, seed, nu
       fc.subarray(names, { minLength: 2 }),
       async (subset) => {
         const selected = subset.map(n => byName[n]);
-        const { severity, error, hasICs, crashed } = await probe(fnFile, fnName, selected, watchFile, count, iters);
+        const { severity, error, hasICs, crashed } = await probe(fnFile, fnName, selected, watchFile, count, iters, fnFilter, collectorFile);
 
         if (hasICs) anyICs = true;
         if (severity === 1) anyMonomorphic = true;
@@ -52,7 +54,7 @@ async function fuzz({ fnFile, fnName, strategies, targetSev, watchFile, seed, nu
 
   const minimalNames      = fcResult.counterexample[0];
   const minimalStrategies = minimalNames.map(n => byName[n]);
-  const { ics }           = await probe(fnFile, fnName, minimalStrategies, watchFile, count, iters);
+  const { ics }           = await probe(fnFile, fnName, minimalStrategies, watchFile, count, iters, fnFilter, collectorFile);
 
   return { found: true, minimalStrategies, ics, numShrinks: fcResult.numShrinks, rngSeed: fcResult.seed, anyICs, anyMonomorphic, numCrashes };
 }
