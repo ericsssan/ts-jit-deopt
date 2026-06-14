@@ -1,4 +1,4 @@
-# ts-jit-deopt
+# ic-fuzzer
 
 Runnable companion to **[From Production Flamegraph to Fixed Megamorphic Call Site](./ARTICLE.md)** — a walkthrough of diagnosing and fixing V8 JIT deoptimization in Node.js.
 
